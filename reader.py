@@ -110,7 +110,7 @@ def _string_to_idx(string):
   char = string[0].lower()
   ints = ord(char) - 96
 
-  if octave+count+ints < 0 or octave+count+ints>90:
+  if octave+count+ints < 0 or octave+count+ints>88:
     print("HAHAHAHAHHDFJ FASKLDJFCED UR FUCKEDKASKDJFKASDJFKJ")
 
   return octave+count+ints
