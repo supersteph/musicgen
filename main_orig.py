@@ -66,31 +66,39 @@ import reader
 flags = tf.flags
 logging = tf.logging
 
+flags.DEFINE_string(
+    "model", "small",
+    "A type of model. Possible options are: small, medium, large.")
+flags.DEFINE_string("data_path", None,
+                    "Where the training/test data is stored.")
 flags.DEFINE_string("save_path", None,
                     "Model output directory.")
+flags.DEFINE_bool("use_fp16", False,
+                  "Train using 16-bit floats instead of 32bit floats")
 
 FLAGS = flags.FLAGS
 
 
 def data_type():
-  return tf.float32
+  return tf.float16 if FLAGS.use_fp16 else tf.float32
 
 
 class PTBInput(object):
   """The input data."""
 
-  def __init__(self, config, data, name=None):
+  def __init__(self, config, data,predicting = None, name=None):
     self.batch_size = batch_size = config.batch_size
     self.num_steps = num_steps = config.num_steps
     self.epoch_size = ((len(data) // batch_size) - 1) // num_steps
-    self.input_data, self.targets = reader.ptb_producer(
-        data, batch_size, num_steps, name=name)
+    if predicting == True:
+      self.input_data, self.targets = reader.ptb_producer(
+          data, batch_size, num_steps, name=name)
 
 
 class PTBModel(object):
   """The PTB model."""
 
-  def __init__(self, is_training, config, input_):
+  def __init__(self, is_training,is_predicting, config, input_):
     self._input = input_
 
     batch_size = input_.batch_size
@@ -143,7 +151,11 @@ class PTBModel(object):
     softmax_w = tf.get_variable(
         "softmax_w", [size, vocab_size], dtype=data_type())
     softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-    logits = tf.matmul(output, softmax_w) + softmax_b
+    self._logits = tf.matmul(output, softmax_w) + softmax_b
+    logits = self._logits
+
+    if predicting == True:
+      return
     loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
         [logits],
         [tf.reshape(input_.targets, [-1])],
@@ -167,18 +179,16 @@ class PTBModel(object):
         tf.float32, shape=[], name="new_learning_rate")
     self._lr_update = tf.assign(self._lr, self._new_lr)
 
-    #update lr
-
   def assign_lr(self, session, lr_value):
     session.run(self._lr_update, feed_dict={self._new_lr: lr_value})
 
   @property
-  def logits(self):
-    return self._logits
-    
-  @property
   def input(self):
     return self._input
+
+  @property
+  def logits(self):
+    return self._logits
 
   @property
   def initial_state(self):
@@ -207,14 +217,63 @@ class SmallConfig(object):
   learning_rate = 1.0
   max_grad_norm = 5
   num_layers = 2
-  num_steps = 3
+  num_steps = 20
   hidden_size = 200
   max_epoch = 4
   max_max_epoch = 13
   keep_prob = 1.0
   lr_decay = 0.5
-  batch_size = 1
-  vocab_size = 90
+  batch_size = 20
+  vocab_size = 10000
+
+
+class MediumConfig(object):
+  """Medium config."""
+  init_scale = 0.05
+  learning_rate = 1.0
+  max_grad_norm = 5
+  num_layers = 2
+  num_steps = 35
+  hidden_size = 650
+  max_epoch = 6
+  max_max_epoch = 39
+  keep_prob = 0.5
+  lr_decay = 0.8
+  batch_size = 20
+  vocab_size = 10000
+
+
+class LargeConfig(object):
+  """Large config."""
+  init_scale = 0.04
+  learning_rate = 1.0
+  max_grad_norm = 10
+  num_layers = 2
+  num_steps = 35
+  hidden_size = 1500
+  max_epoch = 14
+  max_max_epoch = 55
+  keep_prob = 0.35
+  lr_decay = 1 / 1.15
+  batch_size = 20
+  vocab_size = 10000
+
+
+class TestConfig(object):
+  """Tiny config, for testing."""
+  init_scale = 0.1
+  learning_rate = 1.0
+  max_grad_norm = 1
+  num_layers = 1
+  num_steps = 2
+  hidden_size = 2
+  max_epoch = 1
+  max_max_epoch = 1
+  keep_prob = 1.0
+  lr_decay = 0.5
+  batch_size = 20
+  vocab_size = 10000
+
 
 def run_epoch(session, model, eval_op=None, verbose=False):
   """Runs the model on the given data."""
@@ -227,33 +286,26 @@ def run_epoch(session, model, eval_op=None, verbose=False):
       "cost": model.cost,
       "final_state": model.final_state,
   }
-  #if the model is traingin this would be the train_op and then when it was fetched then it gets 
   if eval_op is not None:
     fetches["eval_op"] = eval_op
 
-  #go through the epochs
   for step in range(model.input.epoch_size):
     feed_dict = {}
     for i, (c, h) in enumerate(model.initial_state):
       feed_dict[c] = state[i].c
       feed_dict[h] = state[i].h
-      #put the intial state as the intitial state
 
-    #trains session if there is a train_op and feeds the initial state returns dictionary of the cost and final state 
-    # print("SIZE %d" % feed_dict[].size)
     vals = session.run(fetches, feed_dict)
-
     cost = vals["cost"]
     state = vals["final_state"]
-    #get those
 
     costs += cost
     iters += model.input.num_steps
 
     if verbose and step % (model.input.epoch_size // 10) == 10:
-      print("%.3f perplexity: %.3f speed: %.0f %.0f wps" %
+      print("%.3f perplexity: %.3f speed: %.0f wps" %
             (step * 1.0 / model.input.epoch_size, np.exp(costs / iters),
-             time.time(),start_time))
+             (time.time() - start_time)))
 
   return np.exp(costs / iters)
 
@@ -270,30 +322,44 @@ def get_config():
   else:
     raise ValueError("Invalid model: %s", FLAGS.model)
 
+
 def main(_):
-  print("yo")
-  raw_data = reader.ptb_raw_data_test()
+  if not FLAGS.data_path:
+    raise ValueError("Must set --data_path to PTB data directory")
 
-  config = SmallConfig()
+  raw_data = reader.ptb_raw_data(FLAGS.data_path)
+  train_data, valid_data, test_data, _ = raw_data
 
-  #configuration for eval
+  config = get_config()
+  eval_config = get_config()
+  eval_config.batch_size = 1
+  eval_config.num_steps = 1
 
   with tf.Graph().as_default():
     initializer = tf.random_uniform_initializer(-config.init_scale,
                                                 config.init_scale)
 
     with tf.name_scope("Train"):
-      train_input = PTBInput(config=config, data=raw_data, name="TrainInput")
+      train_input = PTBInput(config=config, data=train_data, name="TrainInput")
       with tf.variable_scope("Model", reuse=None, initializer=initializer):
         m = PTBModel(is_training=True, config=config, input_=train_input)
       tf.summary.scalar("Training Loss", m.cost)
       tf.summary.scalar("Learning Rate", m.lr)
 
+    with tf.name_scope("Valid"):
+      valid_input = PTBInput(config=config, data=valid_data, name="ValidInput")
+      with tf.variable_scope("Model", reuse=True, initializer=initializer):
+        mvalid = PTBModel(is_training=False, config=config, input_=valid_input)
+      tf.summary.scalar("Validation Loss", mvalid.cost)
+
+    with tf.name_scope("Test"):
+      test_input = PTBInput(config=eval_config, data=test_data, name="TestInput")
+      with tf.variable_scope("Model", reuse=True, initializer=initializer):
+        mtest = PTBModel(is_training=False, config=eval_config,
+                         input_=test_input)
+
     sv = tf.train.Supervisor(logdir=FLAGS.save_path)
     with sv.managed_session() as session:
-      #sv.saver.restore(session, tf.train.latest_checkpoint(FLAGS.save_path))
-
-      #print(predict('trees', session,mtest,word_to_idx))
       for i in range(config.max_max_epoch):
         lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
         m.assign_lr(session, config.learning_rate * lr_decay)
@@ -301,10 +367,17 @@ def main(_):
         print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
         train_perplexity = run_epoch(session, m, eval_op=m.train_op,
                                      verbose=True)
+        print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+        valid_perplexity = run_epoch(session, mvalid)
+        print("Epoch: %d Valid Perplexity: %.3f" % (i + 1, valid_perplexity))
+
+      test_perplexity = run_epoch(session, mtest)
+      print("Test Perplexity: %.3f" % test_perplexity)
 
       if FLAGS.save_path:
         print("Saving model to %s." % FLAGS.save_path)
-        sv.saver.save(session, FLAGS.save_path, global_step = sv.global_step)
+        sv.saver.save(session, FLAGS.save_path, global_step=sv.global_step)
+
 
 if __name__ == "__main__":
   tf.app.run()
