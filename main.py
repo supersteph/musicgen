@@ -101,78 +101,72 @@ class PTBModel(object):
     # Slightly better results can be obtained with forget gate biases
     # initialized to 1 but the hyperparameters of the model would need to be
     # different than reported in the paper.
-    lstm_cell = tf.contrib.rnn.BasicLSTMCell(size, forget_bias=0.0, state_is_tuple=True)
-    #basic lstm cell
+    def lstm_cell():
+      return tf.contrib.rnn.BasicLSTMCell(
+          size, forget_bias=0.0, state_is_tuple=True)
+    attn_cell = lstm_cell
     if is_training and config.keep_prob < 1:
-      lstm_cell = tf.contrib.rnn_cell.DropoutWrapper(
-          lstm_cell, output_keep_prob=config.keep_prob)
-      #apply dropout on the cell layer
-    cell = tf.contrib.rnn.MultiRNNCell([lstm_cell] * config.num_layers, state_is_tuple=True)
-    #turn it into a multi rnn cell
+      def attn_cell():
+        return tf.contrib.rnn.DropoutWrapper(
+            lstm_cell(), output_keep_prob=config.keep_prob)
+    cell = tf.contrib.rnn.MultiRNNCell(
+        [attn_cell() for _ in range(config.num_layers)], state_is_tuple=True)
 
     self._initial_state = cell.zero_state(batch_size, data_type())
-    #zerostate list of batchsize * embeddingsize full of zeroes
 
     with tf.device("/cpu:0"):
       embedding = tf.get_variable(
           "embedding", [vocab_size, size], dtype=data_type())
-      print(embedding.get_shape())
       inputs = tf.nn.embedding_lookup(embedding, input_.input_data)
-      #retreives the vector from the embedding variable
 
     if is_training and config.keep_prob < 1:
-      inputs = tf.contrib.rnn.dropout(inputs, config.keep_prob)
-      #apply dropout again but on the layer just before the cell
+      inputs = tf.nn.dropout(inputs, config.keep_prob)
 
+    # Simplified version of models/tutorials/rnn/rnn.py's rnn().
+    # This builds an unrolled LSTM for tutorial purposes only.
+    # In general, use the rnn() or state_saving_rnn() from rnn.py.
+    #
+    # The alternative version of the code below is:
+    #
+    # inputs = tf.unstack(inputs, num=num_steps, axis=1)
+    # outputs, state = tf.nn.rnn(cell, inputs,
+    #                            initial_state=self._initial_state)
     outputs = []
     state = self._initial_state
-          #initial state and stuff
     with tf.variable_scope("RNN"):
-      #not using seq2seq
       for time_step in range(num_steps):
         if time_step > 0: tf.get_variable_scope().reuse_variables()
         (cell_output, state) = cell(inputs[:, time_step, :], state)
-        #run the cell and set the next state as cur state at the time step
-        #cell_output is the size  of size, batch_size
         outputs.append(cell_output)
-        #add the output at the end of outputs
-        #outputs at the end should be a list of timestep size with each one having the size of batchsize*embeddingsize
 
-    output = tf.reshape(tf.concat(axis=1,values=outputs),[-1, size])
-    #shape the output into 2d so softmax can be applied to it
+    output = tf.reshape(tf.concat(axis=1, values=outputs), [-1, size])
     softmax_w = tf.get_variable(
         "softmax_w", [size, vocab_size], dtype=data_type())
-
     softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-    self._logits = tf.matmul(output, softmax_w) + softmax_b
-    #softmax layer
+    logits = tf.matmul(output, softmax_w) + softmax_b
     loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
-        [self._logits],
+        [logits],
         [tf.reshape(input_.targets, [-1])],
         [tf.ones([batch_size * num_steps], dtype=data_type())])
-    #do the loss
     self._cost = cost = tf.reduce_sum(loss) / batch_size
-    #get the cost reduce sum adds everything in loss
     self._final_state = state
-    #set as final state
 
     if not is_training:
       return
 
     self._lr = tf.Variable(0.0, trainable=False)
     tvars = tf.trainable_variables()
-    #get all trainable variables
     grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
                                       config.max_grad_norm)
-    #clip gradients so you don't get explodng gradients
     optimizer = tf.train.GradientDescentOptimizer(self._lr)
     self._train_op = optimizer.apply_gradients(
         zip(grads, tvars),
         global_step=tf.contrib.framework.get_or_create_global_step())
-    #train operation
+
     self._new_lr = tf.placeholder(
         tf.float32, shape=[], name="new_learning_rate")
     self._lr_update = tf.assign(self._lr, self._new_lr)
+
     #update lr
 
   def assign_lr(self, session, lr_value):
@@ -301,7 +295,7 @@ def main(_):
 
       #print(predict('trees', session,mtest,word_to_idx))
       for i in range(config.max_max_epoch):
-        lr_decay = config.lr_decay ** max(i - config.max_epoch, 0.0)
+        lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
         m.assign_lr(session, config.learning_rate * lr_decay)
 
         print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
