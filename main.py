@@ -55,7 +55,7 @@ $ python ptb_word_lm.py --data_path=simple-examples/data/
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+  
 import time
 
 import numpy as np
@@ -92,6 +92,7 @@ class PTBInput(object):
     self.epoch_size = ((len(data) // batch_size) - 1) // num_steps
     self.input_data, self.targets = reader.ptb_producer(
         data, batch_size, num_steps, name=name)
+
 
 
 class PTBModel(object):
@@ -150,9 +151,10 @@ class PTBModel(object):
     softmax_w = tf.get_variable(
         "softmax_w", [size, vocab_size], dtype=data_type())
     softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-    logits = tf.matmul(output, softmax_w) + softmax_b
+    self._logits = tf.matmul(output, softmax_w) + softmax_b
+
     loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
-        [logits],
+        [self._logits],
         [tf.reshape(input_.targets, [-1])],
         [tf.ones([batch_size * num_steps], dtype=data_type())])
     self._cost = cost = tf.reduce_sum(loss) / batch_size
@@ -180,6 +182,10 @@ class PTBModel(object):
   @property
   def input(self):
     return self._input
+
+  @property
+  def logits(self):
+    return self._logits
 
   @property
   def initial_state(self):
@@ -282,11 +288,10 @@ def get_config():
   else:
     raise ValueError("Invalid model: %s", FLAGS.model)
 
+def predict(starter, model, session, initializer):
 
-def predict(starter, model):
-    # state = cell.zero_state(batchsize, tf.float32).eval()
-    # state = tf.convert_to_tensor(cell.zero_state(batchsize, tf.float32))
-    # state.eval()
+  state = model._initial_state
+  # state.eval()
   starterwords = starter.split(" ")
   nextword = 0
   total = ""
@@ -295,20 +300,20 @@ def predict(starter, model):
     primer = [[word]]
     model._input = primer
     model._initial_state = state
-    guessed_logits, state = sess.run([logits, final_state])
+    guessed_logits, state = session.run([model._logits, model._final_state])
     nextword = np.argmax(guessed_logits,1)[0]
 
-  for i in xrange(100):
+  for i in range(100):
     total += " " + nextword
     primer = [[nextword]]
     model._input = primer
     model._initial_state = state
-    guessed_logits, state = sess.run([logits, final_state])
+    guessed_logits, state = session.run([model._logits, model._final_state])
     nextword = np.argmax(guessed_logits,1)[0]
     if nextword == 88:
       break
 
-    return total
+  return total
 
 def main(_):
   if not FLAGS.data_path:
@@ -322,10 +327,6 @@ def main(_):
   eval_config.batch_size = 1
   eval_config.num_steps = 1
 
-  with tf.name_scope("Predict"):
-      train_input = PTBInput(config=config, data="", name="")
-      with tf.variable_scope("Model", reuse=None, initializer=initializer):
-        mp = PTBModel(is_training=True, config=eval_config)
   with tf.Graph().as_default():
     initializer = tf.random_uniform_initializer(-config.init_scale,
                                                 config.init_scale)
@@ -338,17 +339,27 @@ def main(_):
         m = PTBModel(is_training=True, config=config, input_=train_input)
       tf.summary.scalar("Training Loss", m.cost)
       tf.summary.scalar("Learning Rate", m.lr)
+    with tf.name_scope("Predict"):
+      train_input = PTBInput(config=eval_config, data=[[89]], name="TrainInput")
+      with tf.variable_scope("Model", reuse=True, initializer=initializer):
+        predictm = PTBModel(is_training=True, config=config, input_=train_input)
+
 
     sv = tf.train.Supervisor(logdir=FLAGS.save_path)
-    with sv.managed_session() as session:
-      for i in range(config.max_max_epoch):
-        lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
-        m.assign_lr(session, config.learning_rate * lr_decay)
 
-        print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
-        train_perplexity = run_epoch(session, m, eval_op=m.train_op,
-                                     verbose=True)
-        print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+    with sv.managed_session() as session:
+      # for i in range(config.max_max_epoch):
+      #   lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.0)
+      #   m.assign_lr(session, config.learning_rate * lr_decay)
+
+      #   print("Epoch: %d Learning rate: %.3f" % (i + 1, session.run(m.lr)))
+      #   train_perplexity = run_epoch(session, m, eval_op=m.train_op,
+      #                                verbose=True)
+      #   print("Epoch: %d Train Perplexity: %.3f" % (i + 1, train_perplexity))
+
+      sv.saver.restore(session,FLAGS.save_path+"/model.ckpt-0.meta")
+
+      print(predict("45",predictm,session,initializer))
 
 
       if FLAGS.save_path:

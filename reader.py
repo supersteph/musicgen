@@ -66,9 +66,9 @@ def ptb_raw_data(data_path=None):
     where each of the data objects can be passed to PTBIterator.
   """
 
-  train_path = os.path.join(data_path, "placeholder.txt")
-  word_to_id = _build_vocab(train_path)
-  train_data = _file_to_word_ids(train_path, word_to_id)
+ 
+  word_to_id = _build_vocab(os.getcwd()+"/placeholder.txt")
+  train_data = _file_to_word_ids(os.getcwd()+"/placeholder.txt", word_to_id)
   vocabulary = len(word_to_id)
   return train_data, word_to_id
 
@@ -100,8 +100,13 @@ def ptb_producer(raw_data, batch_size, num_steps, name=None):
     batch_len = data_len // batch_size
     data = tf.reshape(raw_data[0 : batch_size * batch_len],
                       [batch_size, batch_len])
+    print(data_len)
+    print(batch_size)
+    print(batch_len)
+    print(num_steps)
+    epoch_size = (batch_len) // num_steps 
 
-    epoch_size = (batch_len - 1) // num_steps
+
     assertion = tf.assert_positive(
         epoch_size,
         message="epoch_size == 0, decrease batch_size or num_steps")
@@ -118,7 +123,7 @@ def ptb_producer(raw_data, batch_size, num_steps, name=None):
     return x, y
 
 
-def ptb_producer_notarg(raw_data, batch_size, num_steps, name=None):
+def ptb_producer_(raw_data, batch_size, num_steps, name=None):
   """Iterate on the raw PTB data.
 
   This chunks up raw_data into batches of examples and returns Tensors that
