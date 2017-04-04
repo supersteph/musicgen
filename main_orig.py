@@ -86,18 +86,19 @@ def data_type():
 class PTBInput(object):
   """The input data."""
 
-  def __init__(self, config, data, name=None):
+  def __init__(self, config, data,predicting = None, name=None):
     self.batch_size = batch_size = config.batch_size
     self.num_steps = num_steps = config.num_steps
     self.epoch_size = ((len(data) // batch_size) - 1) // num_steps
-    self.input_data, self.targets = reader.ptb_producer(
-        data, batch_size, num_steps, name=name)
+    if predicting == True:
+      self.input_data, self.targets = reader.ptb_producer(
+          data, batch_size, num_steps, name=name)
 
 
 class PTBModel(object):
   """The PTB model."""
 
-  def __init__(self, is_training, config, input_):
+  def __init__(self, is_training,is_predicting, config, input_):
     self._input = input_
 
     batch_size = input_.batch_size
@@ -150,7 +151,11 @@ class PTBModel(object):
     softmax_w = tf.get_variable(
         "softmax_w", [size, vocab_size], dtype=data_type())
     softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-    logits = tf.matmul(output, softmax_w) + softmax_b
+    self._logits = tf.matmul(output, softmax_w) + softmax_b
+    logits = self._logits
+
+    if predicting == True:
+      return
     loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
         [logits],
         [tf.reshape(input_.targets, [-1])],
@@ -180,6 +185,10 @@ class PTBModel(object):
   @property
   def input(self):
     return self._input
+
+  @property
+  def logits(self):
+    return self._logits
 
   @property
   def initial_state(self):
